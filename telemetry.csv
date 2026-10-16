@@ -1,0 +1,2 @@
+team_id,mission_time,packet_count,state,altitude,temperature,battery_voltage
+TEAM8,12.5,1,DESCENT,150.2,23.4,4.1
