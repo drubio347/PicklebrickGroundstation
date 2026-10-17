@@ -22,11 +22,11 @@ from PyQt6.QtWidgets import (
 class GroundStation(QMainWindow):
     def __init__(self):
         super().__init__()
-
         self.setWindowTitle("Picklebrick Ground Station")
         self.resize(1400, 800)
 
         # Demo data only. No ESP32 is connected yet.
+        self.show_all_data = False
         self.elapsed = 0
         self.times = []
         self.altitudes = []
@@ -152,6 +152,7 @@ class GroundStation(QMainWindow):
         solar_button = QPushButton("Deploy Solar Panels")
         cansat_button = QPushButton("Deploy CanSat")
         clear_button = QPushButton("Clear Graph Data")
+        swap_graphs_button = QPushButton("Swap Graph Zoom")
 
         solar_button.clicked.connect(
             lambda: self.show_demo_notice("Solar deployment")
@@ -160,10 +161,13 @@ class GroundStation(QMainWindow):
             lambda: self.show_demo_notice("CanSat deployment")
         )
         clear_button.clicked.connect(self.clear_data)
+        swap_graphs_button.clicked.connect(self.swap_graphs)
 
         controls_layout.addWidget(solar_button)
         controls_layout.addWidget(cansat_button)
         controls_layout.addWidget(clear_button)
+        controls_layout.addWidget(swap_graphs_button)
+        
 
         left.addWidget(controls_box)
         left.addStretch()
@@ -284,12 +288,19 @@ class GroundStation(QMainWindow):
         self.temperatures.append(temperature)
         self.velocities.append(velocity)
 
-        # Keep the most recent 120 readings
-        self.times = self.times[-120:]
-        self.altitudes = self.altitudes[-120:]
-        self.batteries = self.batteries[-120:]
-        self.temperatures = self.temperatures[-120:]
-        self.velocities = self.velocities[-120:]
+        # Preserve all readings; choose what to display.    
+        if self.show_all_data:
+            display_times = self.times
+            display_altitudes = self.altitudes
+            display_batteries = self.batteries
+            display_temperatures = self.temperatures
+            display_velocities = self.velocities
+        else:
+            display_times = self.times[-120:]
+            display_altitudes = self.altitudes[-120:]
+            display_batteries = self.batteries[-120:]
+            display_temperatures = self.temperatures[-120:]
+            display_velocities = self.velocities[-120:]
 
         # Update the telemetry labels
         self.state_label.setText(f"Flight State: {state}")
@@ -306,16 +317,16 @@ class GroundStation(QMainWindow):
 
         # Update the graphs
         self.battery_plot["curve"].setData(
-            self.times, self.batteries
+            display_times, display_batteries
         )
         self.altitude_plot["curve"].setData(
-            self.times, self.altitudes
+            display_times, display_altitudes
         )
         self.velocity_plot["curve"].setData(
-            self.times, self.velocities
+            display_times, display_velocities
         )
         self.temp_plot["curve"].setData(
-            self.times, self.temperatures
+            display_times, display_temperatures
         )
 
     def clear_data(self):
@@ -341,13 +352,69 @@ class GroundStation(QMainWindow):
             4000
         )
 
-    def show_demo_notice(self, command):
-        """Prevent demo buttons from sending real commands."""
+"""
+    def swap_graphs(self):
+        ""Changes zoom of graphs""
+        timesClicked = 0
+        Switch = 0
+        if swap_graphs_button.clicked = True
+            timesClicked += 1
+            Switch = timesClicked%2
+            if self.show_all_data ""Switch = 0"":
+                display_times = self.times
+                display_altitudes = self.altitudes
+                display_batteries = self.batteries
+                display_temperatures = self.temperatures
+                display_velocities = self.velocities
+            else:
+                display_times = self.times[-120:]
+                display_altitudes = self.altitudes[-120:]
+                display_batteries = self.batteries[-120:]
+                display_temperatures = self.temperatures[-120:]
+                display_velocities = self.velocities[-120:]
+            return  self.times, self.altitudes, self.batteries, self.temperatures, self.velocities
+    
+    )"""
 
+    def swap_graphs(self):
+        """Toggle between recent readings and all readings."""
+        self.show_all_data = not self.show_all_data
+    
+        if self.show_all_data:
+            mode = "All readings"
+        else:
+            mode = "Most recent 120 readings"
+    
         self.statusBar().showMessage(
-            f"{command}: DEMO ONLY. No hardware command sent.",
-            5000
+            f"Graph display: {mode}", 4000
         )
+    
+        # Refresh the graphs immediately.
+        for graph, values in [
+            (self.battery_plot, self.batteries),
+            (self.altitude_plot, self.altitudes),
+            (self.velocity_plot, self.velocities),
+            (self.temp_plot, self.temperatures),
+        ]:
+            times = (
+                self.times
+                if self.show_all_data
+                else self.times[-120:]
+            )
+            displayed_values = (
+                values
+                if self.show_all_data
+                else values[-120:]
+            )
+            graph["curve"].setData(times, displayed_values)
+        
+        def show_demo_notice(self, command):
+            """Prevent demo buttons from sending real commands."""
+    
+            self.statusBar().showMessage(
+                f"{command}: DEMO ONLY. No hardware command sent.",
+                5000
+            )
 
 
 if __name__ == "__main__":
