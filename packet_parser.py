@@ -1,16 +1,13 @@
 def parse_packet(packet):
-    """Convert a telemetry string into structured Python data."""
+    """Parse a comma-separated CanSat telemetry packet."""
 
-    # Remove whitespace and split the packet at each comma
     fields = packet.strip().split(",")
 
-    # Make sure the packet contains all 7 expected fields
-    if len(fields) != 7:
+    if len(fields) != 14:
         raise ValueError(
-            f"Expected 7 fields, received {len(fields)}"
+            f"Expected 14 fields, received {len(fields)}"
         )
 
-    # Convert the text into useful values
     data = {
         "team_id": fields[0],
         "mission_time": float(fields[1]),
@@ -18,7 +15,14 @@ def parse_packet(packet):
         "state": fields[3],
         "altitude": float(fields[4]),
         "temperature": float(fields[5]),
-        "battery_voltage": float(fields[6]),
+        "pressure": float(fields[6]),
+        "battery_voltage": float(fields[7]),
+        "latitude": float(fields[8]),
+        "longitude": float(fields[9]),
+        "accel_x": float(fields[10]),
+        "accel_y": float(fields[11]),
+        "accel_z": float(fields[12]),
+        "satellites": int(fields[13]),
     }
 
     return data

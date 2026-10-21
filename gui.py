@@ -1,18 +1,16 @@
-
 import sys
 import math
-
-# pyqtgraph is required at runtime; the IDE may still flag it before the
-# dependency is installed in the current environment.
-import pyqtgraph as pg  # type: ignore[import-not-found]
+import time 
+import pyqtgraph as pg
 from PyQt6.QtCore import QTimer
+from packet_parser import parse_packet
+from telemetry_source import generate_mock_packet
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QGridLayout,
     QLabel,
     QPushButton,
     QGroupBox,
@@ -26,13 +24,20 @@ class GroundStation(QMainWindow):
         self.setWindowTitle("Picklebrick Ground Station")
         self.resize(1400, 800)
 
-        # Demo data only. No ESP32 is connected yet.
-        self.elapsed = 0
+        # Shared telemetry simulation
+        self.start_time = time.monotonic()
+        self.packet_count = 0
+        self.previous_altitude = None
+        self.previous_mission_time = 0.0
+        
         self.times = []
         self.altitudes = []
         self.batteries = []
         self.temperatures = []
         self.velocities = []
+
+        # False = recent 60 readings; True = all readings
+        self.show_all_data = False
 
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -67,10 +72,8 @@ class GroundStation(QMainWindow):
             }
         """)
 
-        # Main window layout
         central = QWidget()
         self.setCentralWidget(central)
-
         main_layout = QVBoxLayout(central)
 
         # Header
@@ -105,7 +108,7 @@ class GroundStation(QMainWindow):
         columns.addLayout(middle, 10)
         columns.addLayout(right, 10)
 
-        # LEFT COLUMN: Flight status and telemetry
+        # Flight status
         flight_box = QGroupBox("Flight Status")
         flight_layout = QVBoxLayout(flight_box)
 
@@ -120,9 +123,9 @@ class GroundStation(QMainWindow):
         )
         self.phase_label.setWordWrap(True)
         flight_layout.addWidget(self.phase_label)
-
         left.addWidget(flight_box)
 
+        # Live telemetry
         telemetry_box = QGroupBox("Live Telemetry")
         telemetry_layout = QVBoxLayout(telemetry_box)
 
@@ -133,25 +136,29 @@ class GroundStation(QMainWindow):
         self.time_label = QLabel("Elapsed Time: 00:00")
         self.velocity_label = QLabel("Velocity: -- m/s")
 
-        for label in [
+        for label in (
             self.altitude_label,
             self.temp_label,
             self.battery_label,
             self.panel_label,
             self.time_label,
             self.velocity_label,
-        ]:
+        ):
             label.setStyleSheet("font-size: 15px; padding: 6px;")
             telemetry_layout.addWidget(label)
 
         left.addWidget(telemetry_box)
 
+        # Controls
         controls_box = QGroupBox("Controls")
         controls_layout = QVBoxLayout(controls_box)
 
         solar_button = QPushButton("Deploy Solar Panels")
         cansat_button = QPushButton("Deploy CanSat")
         clear_button = QPushButton("Clear Graph Data")
+        self.swap_graphs_button = QPushButton(
+            "Show All Graph Data"
+        )
 
         solar_button.clicked.connect(
             lambda: self.show_demo_notice("Solar deployment")
@@ -160,15 +167,20 @@ class GroundStation(QMainWindow):
             lambda: self.show_demo_notice("CanSat deployment")
         )
         clear_button.clicked.connect(self.clear_data)
+        self.swap_graphs_button.clicked.connect(self.swap_graphs)
 
-        controls_layout.addWidget(solar_button)
-        controls_layout.addWidget(cansat_button)
-        controls_layout.addWidget(clear_button)
+        for button in (
+            solar_button,
+            cansat_button,
+            clear_button,
+            self.swap_graphs_button,
+        ):
+            controls_layout.addWidget(button)
 
         left.addWidget(controls_box)
         left.addStretch()
 
-        # MIDDLE COLUMN: Battery, altitude and velocity plots
+        # Middle column: battery, altitude, velocity
         self.battery_plot = self.make_plot(
             "Battery Voltage", "Voltage (V)"
         )
@@ -183,7 +195,7 @@ class GroundStation(QMainWindow):
         middle.addWidget(self.altitude_plot["box"])
         middle.addWidget(self.velocity_plot["box"])
 
-        # RIGHT COLUMN: Temperature and GPS placeholder
+        # Right column: temperature and GPS placeholder
         self.temp_plot = self.make_plot(
             "Temperature Over Time", "Temperature (°C)"
         )
@@ -198,28 +210,22 @@ class GroundStation(QMainWindow):
             "Longitude: --\n\n"
             "Location display will be added when GPS data is available."
         )
-        self.gps_label.setAlignment(
-            self.gps_label.alignment()
-        )
         self.gps_label.setWordWrap(True)
         self.gps_label.setMinimumHeight(180)
-
         gps_layout.addWidget(self.gps_label)
         right.addWidget(gps_box)
 
-        # Bottom connection/status message
         self.statusBar().showMessage(
             "Simulation active | Waiting for real receiver integration"
         )
 
-        # Update simulated measurements once per second
+        # Update simulated measurements every second
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_demo_data)
+        self.timer.timeout.connect(self.update_telemetry)
         self.timer.start(1000)
 
     def make_plot(self, title, y_label):
         """Create a graph panel."""
-
         box = QGroupBox(title)
         layout = QVBoxLayout(box)
 
@@ -233,7 +239,7 @@ class GroundStation(QMainWindow):
         curve = plot.plot(
             [],
             [],
-            pen=pg.mkPen("#4778ff", width=2)
+            pen=pg.mkPen("#4778ff", width=2),
         )
 
         layout.addWidget(plot)
@@ -244,109 +250,160 @@ class GroundStation(QMainWindow):
             "curve": curve,
         }
 
-    def update_demo_data(self):
-        """Generate test measurements for the GUI."""
+    def update_telemetry(self):
+        """Read a mock packet and update the dashboard."""
 
-        self.elapsed += 1
-        t = self.elapsed
+        elapsed_time = time.monotonic() - self.start_time
+        self.packet_count += 1
 
-        # Simulated ascent followed by descent
-        if t <= 25:
-            altitude = 20.0 * t
-        else:
-            altitude = max(0.0, 500.0 - 18.0 * (t - 25))
+        packet = generate_mock_packet(
+            elapsed_time,
+            self.packet_count
+        )
 
-        # These values are invented for testing the interface.
-        battery = max(0.0, 4.1 - 0.001 * t)
-        temperature = 23.4 + math.sin(t / 5) * 2
-        panel_voltage = 500 + 50 * math.sin(t / 4)
+        try:
+            data = parse_packet(packet)
+        except (ValueError, KeyError) as error:
+            self.statusBar().showMessage(
+                f"Invalid telemetry packet: {error}",
+                5000
+            )
+            return
 
-        if t == 1:
+        # Read the parsed telemetry values.
+        mission_time = data["mission_time"]
+        state = data["state"]
+        altitude = data["altitude"]
+        temperature = data["temperature"]
+        battery = data["battery_voltage"]
+
+        # Estimate vertical velocity from altitude changes.
+        if self.previous_altitude is None:
             velocity = 0.0
         else:
-            velocity = altitude - self.altitudes[-1]
+            elapsed_interval = max(0.001, mission_time - self.previous_mission_time)
+            velocity = (altitude - self.previous_altitude) / elapsed_interval
 
-        # Estimate the current flight phase
-        if t < 3:
-            state = "LAUNCH PAD"
-        elif t <= 25:
-            state = "ASCENT"
-        elif t <= 28:
-            state = "APOGEE"
-        elif altitude > 0:
-            state = "DESCENT"
-        else:
-            state = "LANDED"
+        self.previous_altitude = altitude
+        self.previous_mission_time = mission_time
 
-        self.times.append(t)
+        # Store readings for the graphs.
+        self.times.append(mission_time)
         self.altitudes.append(altitude)
         self.batteries.append(battery)
         self.temperatures.append(temperature)
         self.velocities.append(velocity)
 
-        # Keep the most recent 120 readings
-        self.times = self.times[-120:]
-        self.altitudes = self.altitudes[-120:]
-        self.batteries = self.batteries[-120:]
-        self.temperatures = self.temperatures[-120:]
-        self.velocities = self.velocities[-120:]
-
-        # Update the telemetry labels
+        # Update the dashboard labels.
         self.state_label.setText(f"Flight State: {state}")
         self.altitude_label.setText(f"Altitude: {altitude:.1f} m")
         self.temp_label.setText(f"Temperature: {temperature:.1f} °C")
         self.battery_label.setText(f"Battery: {battery:.2f} V")
-        self.panel_label.setText(
-            f"Panel Voltage: {panel_voltage:.0f} mV"
-        )
-        self.time_label.setText(
-            f"Elapsed Time: {t // 60:02d}:{t % 60:02d}"
-        )
-        self.velocity_label.setText(f"Velocity: {velocity:.1f} m/s")
 
-        # Update the graphs
-        self.battery_plot["curve"].setData(
-            self.times, self.batteries
+        self.panel_label.setText(
+            "Panel Voltage: Not instrumented"
         )
-        self.altitude_plot["curve"].setData(
-            self.times, self.altitudes
+
+        minutes = int(mission_time // 60)
+        seconds = int(mission_time % 60)
+        self.time_label.setText(
+            f"Elapsed Time: {minutes:02d}:{seconds:02d}"
         )
-        self.velocity_plot["curve"].setData(
-            self.times, self.velocities
+
+        self.velocity_label.setText(
+            f"Vertical Velocity: {velocity:.1f} m/s"
         )
-        self.temp_plot["curve"].setData(
-            self.times, self.temperatures
+
+        # Display simulated GPS coordinates.
+        latitude = data["latitude"]
+        longitude = data["longitude"]
+        satellites = data["satellites"]
+
+        self.gps_label.setText(
+            "SIMULATED GPS DATA\n\n"
+            f"Latitude: {latitude:.7f}\n"
+            f"Longitude: {longitude:.7f}\n"
+            f"Satellites: {satellites}"
+        )
+
+        self.refresh_graphs()
+
+    def refresh_graphs(self):
+        """Refresh every graph using the selected time range."""
+        if self.show_all_data:
+            display_times = self.times
+            start_label = "All"
+        else:
+            display_times = self.times[-60:]
+            start_label = "Recent 60"
+
+        start_index = len(self.times) - len(display_times)
+
+        datasets = (
+            (self.battery_plot, self.batteries),
+            (self.altitude_plot, self.altitudes),
+            (self.velocity_plot, self.velocities),
+            (self.temp_plot, self.temperatures),
+        )
+
+        for graph, values in datasets:
+            graph["curve"].setData(
+                display_times,
+                values[start_index:],
+            )
+
+        self.swap_graphs_button.setText(
+            "Show Recent 60 Readings"
+            if self.show_all_data
+            else "Show All Graph Data"
         )
 
     def clear_data(self):
-        """Clear stored graph readings."""
-
-        self.elapsed = 0
+        """Clear stored readings and reset the simulation."""
+        self.start_time = time.monotonic()
+        self.packet_count = 0
+        self.previous_altitude = None
+        self.previous_mission_time = 0.0
         self.times.clear()
         self.altitudes.clear()
         self.batteries.clear()
         self.temperatures.clear()
         self.velocities.clear()
 
-        for graph in [
-            self.battery_plot,
-            self.altitude_plot,
-            self.velocity_plot,
-            self.temp_plot,
-        ]:
-            graph["curve"].setData([], [])
+        self.state_label.setText("Flight State: LAUNCH PAD")
+        self.altitude_label.setText("Altitude: -- m")
+        self.temp_label.setText("Temperature: -- °C")
+        self.battery_label.setText("Battery: -- V")
+        self.panel_label.setText("Panel Voltage: -- mV")
+        self.time_label.setText("Elapsed Time: 00:00")
+        self.velocity_label.setText("Velocity: -- m/s")
+
+        self.refresh_graphs()
 
         self.statusBar().showMessage(
             "Graph data cleared. Simulation will continue.",
-            4000
+            4000,
+        )
+
+    def swap_graphs(self):
+        """Toggle between recent readings and the full history."""
+        self.show_all_data = not self.show_all_data
+        self.refresh_graphs()
+
+        mode = (
+            "all recorded readings"
+            if self.show_all_data
+            else "the most recent 60 readings"
+        )
+        self.statusBar().showMessage(
+            f"Displaying {mode}.", 4000
         )
 
     def show_demo_notice(self, command):
         """Prevent demo buttons from sending real commands."""
-
         self.statusBar().showMessage(
             f"{command}: DEMO ONLY. No hardware command sent.",
-            5000
+            5000,
         )
 
 
