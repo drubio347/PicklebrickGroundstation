@@ -375,8 +375,8 @@ class GroundStation(QMainWindow):
         )
 
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = GroundStation()
-    window.show()
-    sys.exit(app.exec())
+    if __name__ == "__main__":
+        app = QApplication(sys.argv)
+        window = GroundStation()
+        window.show()
+        sys.exit(app.exec())
